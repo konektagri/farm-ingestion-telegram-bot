@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.log
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Env & secrets
+.env
+.env.*
+secret/
+secret/*
+!secret/.gitkeep
+
+# Local data / logs
+logs/
+*.sqlite3
+
+# Jupyter / notebooks (agar use karo)
+*.ipynb_checkpoints/
+
+examples/*
+scripts/*
+
+farm_photos/*
+survey_images/*
+farm_surveys.csv

@@ -1,0 +1,19 @@
+name: agrikredit-staging
+
+services:
+  farm-ingestion-telegram-bot:
+    build:
+      context: .
+      dockerfile: ./Dockerfile-staging
+    restart: on-failure
+    networks:
+      - agrikredit-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  agrikredit-network:
+    driver: bridge
