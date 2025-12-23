@@ -273,13 +273,47 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             photo_count = context.user_data['photo_count']
             
             from handlers import get_text
+            from telegram import ReplyKeyboardMarkup
+            
             success_msg = get_text(
                 lang, 'photo_saved',
                 count=photo_count,
                 folder=drive_folder
             )
             
-            await status_msg.edit_text(success_msg)
+            # Show "Survey Another Farm" button
+            reply_markup = ReplyKeyboardMarkup(
+                [[get_text(lang, 'add_new_farm')]],
+                resize_keyboard=True
+            )
+            
+            # For first photo, create new message with button
+            # For subsequent photos, just update the status message
+            if photo_count == 1:
+                await status_msg.edit_text(success_msg)
+                instruction_msg = await update.message.reply_text(
+                    get_text(lang, 'continue_or_new'),
+                    reply_markup=reply_markup
+                )
+                # Store message ID for future updates
+                context.user_data['photo_instruction_msg_id'] = instruction_msg.message_id
+            else:
+                # Update status message and keep the button message
+                await status_msg.edit_text(success_msg)
+                
+                # Optionally update the instruction message to show it's persistent
+                instruction_msg_id = context.user_data.get('photo_instruction_msg_id')
+                if instruction_msg_id:
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=update.effective_chat.id,
+                            message_id=instruction_msg_id,
+                            text=get_text(lang, 'continue_or_new'),
+                            reply_markup=reply_markup
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not update instruction message: {e}")
+            
             logger.info(f"User {user.id} uploaded photo #{photo_count} to {drive_folder} on Google Drive")
         else:
             from handlers import get_text
@@ -312,6 +346,7 @@ def main():
         ],
         states={
             LANGUAGE: [CallbackQueryHandler(handle_language)],
+            LOCATION: [MessageHandler(filters.LOCATION, handle_location)],
             FARM_NUMBER: [CallbackQueryHandler(handle_farm_number)],
             RAINFALL: [CallbackQueryHandler(handle_rainfall)],
             RAINFALL_INTENSITY: [CallbackQueryHandler(handle_rainfall_intensity)],
@@ -327,7 +362,6 @@ def main():
             HERBICIDE: [CallbackQueryHandler(handle_herbicide)],
             PESTICIDE: [CallbackQueryHandler(handle_pesticide)],
             STRESS_EVENTS: [CallbackQueryHandler(handle_stress_events)],
-            LOCATION: [MessageHandler(filters.LOCATION, handle_location)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )

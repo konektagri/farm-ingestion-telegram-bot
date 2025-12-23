@@ -85,32 +85,30 @@ def save_survey_to_csv(user_id: int, username: str, survey_data: dict, location_
 
 
 async def handle_add_new_farm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle 'Add New Farm' button to restart the survey."""
+    """Handle 'Add New Farm' button to restart the survey from the beginning."""
     # Check if the message text matches "Add New Farm" button in either language
     message_text = update.message.text if update.message else ""
     
     if "Add New Farm" in message_text or "Survey Another Farm" in message_text or "បន្ថែមចម្ការថ្មី" in message_text or "ស្ទង់ចម្ការផ្សេងទៀត" in message_text:
-        # Clear previous survey data but keep language preference
-        lang = context.user_data.get('language', 'en')
+        # Clear all previous data and start fresh (like /start)
         context.user_data.clear()
-        context.user_data['language'] = lang
         context.user_data['survey'] = {}
+        context.user_data['survey_user_id'] = update.effective_user.id
         
-        # Build farm number keyboard (1-20)
-        keyboard = []
-        for i in range(1, 21, 4):  # 4 buttons per row
-            row = [InlineKeyboardButton(str(num), callback_data=f"farm_{num}") for num in range(i, min(i+4, 21))]
-            keyboard.append(row)
-        
+        # Show language selection
+        keyboard = [
+            [InlineKeyboardButton("English 🇬🇧", callback_data="lang_en"),
+             InlineKeyboardButton("ខ្មែរ 🇰🇭", callback_data="lang_km")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        farm_prompt = get_text(lang, 'farm_number_prompt')
+        welcome_text = f"🌾 Farm Data Collection System\n\nWelcome back, {update.effective_user.first_name}!\n\nStarting new survey...\n\nSelect your language to begin:\nសូមជ្រើសរើសភាសា:"
         
         await update.message.reply_text(
-            farm_prompt,
+            welcome_text,
             reply_markup=reply_markup
         )
-        return FARM_NUMBER
+        return LANGUAGE
     
     return ConversationHandler.END
 
@@ -138,38 +136,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def handle_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle language selection and show farm number selection."""
+    """Handle language selection and request location."""
     query = update.callback_query
     await query.answer()
     
     lang = query.data.replace("lang_", "")
     context.user_data['language'] = lang
     
-    # Build farm number keyboard (1-20)
-    keyboard = []
-    for i in range(1, 21, 4):  # 4 buttons per row
-        row = [InlineKeyboardButton(str(num), callback_data=f"farm_{num}") for num in range(i, min(i+4, 21))]
-        keyboard.append(row)
+    # Request location instead of farm number
+    location_button = KeyboardButton(
+        get_text(lang, 'share_location_btn'),
+        request_location=True
+    )
+    reply_markup = ReplyKeyboardMarkup(
+        [[location_button]],
+        one_time_keyboard=True,
+        resize_keyboard=True
+    )
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    farm_prompt = get_text(lang, 'farm_number_prompt')
-    
-    await query.edit_message_text(
-        farm_prompt,
+    await query.edit_message_text(get_text(lang, 'language_selected'))
+    await query.message.reply_text(
+        get_text(lang, 'share_location'),
         reply_markup=reply_markup
     )
-    return FARM_NUMBER
+    return LOCATION
 
 
 async def handle_farm_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle farm number selection and start rainfall question."""
+    """Handle farm number selection, setup drive folder, and start rainfall question."""
     query = update.callback_query
     await query.answer()
     
     lang = get_user_language(context)
     farm_num = query.data.replace("farm_", "")
     context.user_data['survey']['farm_number'] = farm_num
+    
+    # Set Google Drive folder with user and farm number in nested format
+    # Structure: date/province/user/farm
+    date_str = context.user_data.get('date_str', datetime.now().strftime("%Y-%m-%d"))
+    local_folder = context.user_data.get('local_folder', 'Unknown_Location')
+    username = update.effective_user.username or update.effective_user.first_name or f"user_{update.effective_user.id}"
+    username_clean = username.replace(" ", "_")
+    farm_number_padded = f"Farm-{int(farm_num):02d}"
+    drive_folder_path = f"{date_str}/{local_folder}/{username_clean}/{farm_number_padded}"
+    context.user_data['drive_folder'] = drive_folder_path
     
     # Show confirmation and start survey
     confirmation = get_text(lang, 'farm_selected', farm_number=farm_num)
@@ -652,7 +662,7 @@ async def handle_pesticide(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_stress_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle stress events response and show location button."""
+    """Handle stress events response and complete the survey."""
     query = update.callback_query
     await query.answer()
     
@@ -660,61 +670,12 @@ async def handle_stress_events(update: Update, context: ContextTypes.DEFAULT_TYP
     stress = query.data.replace("stress_", "")
     context.user_data['survey']['stress_events'] = stress
     
-    # Survey complete, show location button
-    location_button = KeyboardButton(get_text(lang, 'share_location_btn'), request_location=True)
-    reply_markup = ReplyKeyboardMarkup(
-        [[location_button]], 
-        resize_keyboard=True, 
-        one_time_keyboard=True
-    )
-    
-    await query.edit_message_text(
-        get_text(lang, 'survey_complete')
-    )
-    
-    await query.message.reply_text(
-        get_text(lang, 'share_location'),
-        reply_markup=reply_markup
-    )
-    
-    return LOCATION
-
-
-async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle location sharing."""
-    if not update.message or not update.message.location:
-        lang = get_user_language(context)
-        await update.message.reply_text(get_text(lang, 'use_button'))
-        return LOCATION
-    
-    lang = get_user_language(context)
-    user_loc = update.message.location
-    context.user_data['location'] = user_loc
-    context.user_data['survey_user_id'] = update.effective_user.id  # Track who completed the survey
-
-    # Get current date
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    context.user_data['date_str'] = date_str
-
-    # Use geojson to detect province
-    province = get_province_from_location(user_loc.latitude, user_loc.longitude)
-    local_folder = province.replace(" ", "_") if province else "Unknown_Location"
-
-    context.user_data['local_folder'] = local_folder
-    context.user_data['province'] = province
-    
-    # Set Google Drive folder with user and farm number in nested format
-    # Structure: date/province/user/farm
-    username = update.effective_user.username or update.effective_user.first_name or f"user_{update.effective_user.id}"
-    username_clean = username.replace(" ", "_")
-    
-    farm_number = context.user_data.get('survey', {}).get('farm_number', '0')
-    farm_number_padded = f"Farm-{int(farm_number):02d}"
-    drive_folder_path = f"{date_str}/{local_folder}/{username_clean}/{farm_number_padded}"
-    context.user_data['drive_folder'] = drive_folder_path
-    
-    # Build and send survey summary
+    # Survey complete, build comprehensive summary
     survey = context.user_data.get('survey', {})
+    user_loc = context.user_data.get('location')
+    province = context.user_data.get('province', 'Unknown')
+    date_str = context.user_data.get('date_str', datetime.now().strftime("%Y-%m-%d"))
+    drive_folder_path = context.user_data.get('drive_folder', 'Unknown')
     
     # Helper function to translate survey values
     def translate_value(key: str) -> str:
@@ -726,8 +687,8 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Save survey data to CSV
     try:
         location_data = {
-            'latitude': user_loc.latitude,
-            'longitude': user_loc.longitude,
+            'latitude': user_loc.latitude if user_loc else 0,
+            'longitude': user_loc.longitude if user_loc else 0,
             'province': province
         }
         save_survey_to_csv(
@@ -754,9 +715,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     survey_text = get_text(
         lang, 'survey_summary',
         farm_number=farm_number,
-        province=province or 'Unknown',
-        latitude=f"{user_loc.latitude:.6f}",
-        longitude=f"{user_loc.longitude:.6f}",
+        province=province,
+        latitude=f"{user_loc.latitude:.6f}" if user_loc else "N/A",
+        longitude=f"{user_loc.longitude:.6f}" if user_loc else "N/A",
         rainfall=translate_value('rainfall'),
         intensity=translate_value('rainfall_intensity'),
         soil=translate_value('soil_roughness'),
@@ -774,12 +735,13 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     photo_text = get_text(
         lang, 'photo_upload_instruction',
         farm_number=farm_number,
-        province=province or 'Unknown',
+        province=province,
         folder=drive_folder_path
     )
     
     # Send comprehensive summary
-    await update.message.reply_text(
+    await query.edit_message_text(get_text(lang, 'survey_complete'))
+    await query.message.reply_text(
         survey_text + photo_text,
         reply_markup=ReplyKeyboardMarkup(
             [[get_text(lang, 'add_new_farm')]],
@@ -792,6 +754,53 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     logger.info(f"User {update.effective_user.id} completed survey for Farm #{farm_number} in {province} at {date_str}")
     return ConversationHandler.END
+
+
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle location sharing and show farm number selection."""
+    if not update.message or not update.message.location:
+        lang = get_user_language(context)
+        await update.message.reply_text(get_text(lang, 'use_button'))
+        return LOCATION
+    
+    lang = get_user_language(context)
+    user_loc = update.message.location
+    context.user_data['location'] = user_loc
+    context.user_data['survey_user_id'] = update.effective_user.id  # Track who completed the survey
+
+    # Get current date
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    context.user_data['date_str'] = date_str
+
+    # Use geojson to detect province
+    province = get_province_from_location(user_loc.latitude, user_loc.longitude)
+    local_folder = province.replace(" ", "_") if province else "Unknown_Location"
+
+    context.user_data['local_folder'] = local_folder
+    context.user_data['province'] = province
+    
+    # Show confirmation and ask for farm number
+    location_confirmed = get_text(
+        lang, 'location_confirmed',
+        province=province or 'Unknown',
+        latitude=f"{user_loc.latitude:.6f}",
+        longitude=f"{user_loc.longitude:.6f}"
+    )
+    
+    # Build farm number keyboard (1-20)
+    keyboard = []
+    for i in range(1, 21, 4):  # 4 buttons per row
+        row = [InlineKeyboardButton(str(num), callback_data=f"farm_{num}") for num in range(i, min(i+4, 21))]
+        keyboard.append(row)
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    farm_prompt = get_text(lang, 'farm_number_prompt')
+    
+    await update.message.reply_text(
+        location_confirmed + "\n\n" + farm_prompt,
+        reply_markup=reply_markup
+    )
+    return FARM_NUMBER
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
