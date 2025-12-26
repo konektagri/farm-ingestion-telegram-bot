@@ -79,3 +79,49 @@ STRESS_EVENT_OPTIONS = ('flood', 'drought_event', 'none', 'other_stress')
 PROBLEM_DONE = "done"
 PROBLEM_NONE = "none_observed"
 VALUE_NA = "N/A"
+
+
+# ==================== PROVINCE CODES ====================
+# Cambodian province abbreviation codes for folder naming
+
+PROVINCE_CODES = {
+    'Banteay Meanchey': 'BMC',
+    'Battambang': 'BTB',
+    'Kampong Cham': 'KCM',
+    'Kampong Chhnang': 'KCG',
+    'Kampong Speu': 'KSP',
+    'Kampong Thom': 'KTM',
+    'Kampot': 'KPT',
+    'Kandal': 'KDL',
+    'Koh Kong': 'KKG',
+    'Kratie': 'KTE',
+    'Mondulkiri': 'MKR',
+    'Oddar Meanchey': 'OMC',
+    'Preah Vihear': 'PVH',
+    'Pursat': 'PST',
+    'Prey Veng': 'PVG',
+    'Ratanakiri': 'RKP',
+    'Siem Reap': 'SRP',
+    'Stung Treng': 'STG',
+    'Svay Rieng': 'SRG',
+    'Takeo': 'TKO',
+    'Kep': 'KEP',
+    'Pailin': 'PLN',
+    'Phnom Penh': 'PNH',
+    'Sihanoukville': 'SHV',
+    'Tbong Khmum': 'TBM',
+}
+
+
+def get_province_code(province_name: str) -> str:
+    """
+    Get the province abbreviation code for a given province name.
+    
+    Args:
+        province_name: The full name of the province
+        
+    Returns:
+        The 3-letter province code, or 'UNK' if not found
+    """
+    return PROVINCE_CODES.get(province_name, 'UNK')
+

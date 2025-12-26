@@ -16,7 +16,7 @@ from config import (
 from constants import (
     RAINFALL_INTENSITY_OPTIONS, SOIL_OPTIONS, WATER_STATUS_OPTIONS,
     HEALTH_OPTIONS, YES_NO_REMEMBER_OPTIONS, FERTILIZER_TYPE_OPTIONS,
-    STRESS_EVENT_OPTIONS, PROBLEM_NONE, VALUE_NA
+    STRESS_EVENT_OPTIONS, PROBLEM_NONE, VALUE_NA, get_province_code
 )
 from translations import get_text, get_user_language
 from geo_utils import get_province_from_location
@@ -178,13 +178,19 @@ async def handle_farm_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     farm_num = query.data.replace("farm_", "")
     context.user_data['survey']['farm_number'] = farm_num
     
-    # Set Google Drive folder with user and farm number in nested format
+    # Set Google Drive folder with new structure:
+    # Province Name/CODE-surveyor_name-FarmNo/YYYYMMDD
+    province = context.user_data.get('province', 'Unknown')
+    province_code = get_province_code(province)
     date_str = context.user_data.get('date_str', datetime.now().strftime("%Y-%m-%d"))
-    local_folder = context.user_data.get('local_folder', 'Unknown_Location')
+    date_compact = date_str.replace("-", "")  # Convert 2025-12-26 to 20251226
     username = update.effective_user.username or update.effective_user.first_name or f"user_{update.effective_user.id}"
     username_clean = username.replace(" ", "_")
-    farm_number_padded = f"Farm-{int(farm_num):02d}"
-    drive_folder_path = f"{date_str}/{local_folder}/{username_clean}/{farm_number_padded}"
+    farm_number_padded = f"{int(farm_num):02d}"
+    
+    # New format: Province Name/CODE-surveyor-FarmNo/YYYYMMDD
+    surveyor_folder = f"{province_code}-{username_clean}-{farm_number_padded}"
+    drive_folder_path = f"{province}/{surveyor_folder}/{date_compact}"
     context.user_data['drive_folder'] = drive_folder_path
     
     # Show confirmation and start survey
