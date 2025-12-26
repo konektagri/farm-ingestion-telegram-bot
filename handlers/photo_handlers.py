@@ -101,11 +101,26 @@ async def _upload_photo_background(
     Includes error notification to user if upload fails after retries.
     """
     try:
+        logger.info(f"[Photo #{photo_num}] Starting download from Telegram: {photo_file_id}")
+        
         # Download photo from Telegram
         file = await bot.get_file(photo_file_id)
         await file.download_to_drive(local_path)
         
+        logger.info(f"[Photo #{photo_num}] Downloaded to: {local_path}")
+        
+        # Verify file exists after download
+        import os
+        if not os.path.exists(local_path):
+            logger.error(f"[Photo #{photo_num}] File not found after download: {local_path}")
+            await bot.send_message(chat_id=chat_id, text=get_text(lang, 'photo_upload_failed'))
+            return
+        
+        file_size = os.path.getsize(local_path)
+        logger.info(f"[Photo #{photo_num}] File size: {file_size} bytes")
+        
         # Upload to Google Drive using service
+        logger.info(f"[Photo #{photo_num}] Starting Drive upload to: {drive_folder}")
         drive_service = get_drive_service()
         result = await asyncio.to_thread(
             drive_service.upload_file, 
@@ -114,9 +129,9 @@ async def _upload_photo_background(
         )
         
         if result.success:
-            logger.info(f"User {user_id} uploaded photo #{photo_num} to {drive_folder} on Google Drive")
+            logger.info(f"[Photo #{photo_num}] ✅ Upload successful! File ID: {result.file_id}")
         else:
-            logger.warning(f"Photo upload failed for user {user_id}, photo #{photo_num}: {result.error}")
+            logger.warning(f"[Photo #{photo_num}] ❌ Upload failed: {result.error}")
             # Notify user of failure
             await bot.send_message(
                 chat_id=chat_id,
@@ -124,7 +139,7 @@ async def _upload_photo_background(
             )
 
     except Exception as e:
-        logger.error(f"Background photo upload error: {e}", exc_info=True)
+        logger.error(f"[Photo #{photo_num}] ❌ Background error: {type(e).__name__}: {e}", exc_info=True)
         try:
             await bot.send_message(
                 chat_id=chat_id,
@@ -135,5 +150,7 @@ async def _upload_photo_background(
         
     finally:
         # Clean up temporary file
+        import os
         if os.path.exists(local_path):
             os.remove(local_path)
+            logger.info(f"[Photo #{photo_num}] Cleaned up temp file: {local_path}")

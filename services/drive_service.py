@@ -1,5 +1,6 @@
 """Google Drive service with retry logic and folder caching."""
 import os
+import ssl
 import logging
 from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 # Configuration
 SCOPES = ['https://www.googleapis.com/auth/drive']
 SERVICE_ACCOUNT_FILE = 'secret/service_account.json'
+
+# Exceptions that should trigger a retry
+RETRYABLE_EXCEPTIONS = (HttpError, ConnectionError, ssl.SSLError, OSError, TimeoutError)
 
 
 @dataclass
@@ -77,7 +81,7 @@ class DriveService:
         """Get the parent folder ID."""
         return self._parent_folder_id
     
-    @retry(max_attempts=3, backoff_base=2.0, exceptions=(HttpError, ConnectionError))
+    @retry(max_attempts=3, backoff_base=2.0, exceptions=RETRYABLE_EXCEPTIONS)
     def _get_or_create_folder(self, folder_name: str, parent_id: str) -> str:
         """
         Check if folder exists inside parent, if not create it.
@@ -152,7 +156,6 @@ class DriveService:
         
         return current_parent_id
     
-    @retry(max_attempts=3, backoff_base=2.0, exceptions=(HttpError, ConnectionError))
     def upload_file(self, file_path: str, folder_path: str) -> UploadResult:
         """
         Upload a file to Google Drive with retry logic.
@@ -165,7 +168,16 @@ class DriveService:
             UploadResult with success status and file info
         """
         try:
+            logger.info(f"Starting upload: {file_path} -> {folder_path}")
+            
+            # Check if file exists
+            if not os.path.exists(file_path):
+                error_msg = f"File not found: {file_path}"
+                logger.error(error_msg)
+                return UploadResult(success=False, error=error_msg)
+            
             folder_id = self.create_folder_path(folder_path)
+            logger.info(f"Folder ID obtained: {folder_id}")
             
             file_metadata = {
                 'name': os.path.basename(file_path),
@@ -181,17 +193,21 @@ class DriveService:
                 supportsAllDrives=True
             ).execute()
             
+            logger.info(f"Upload successful: {file.get('id')}")
             return UploadResult(
                 success=True,
                 file_id=file.get('id'),
                 web_link=file.get('webViewLink')
             )
             
+        except HttpError as e:
+            logger.error(f"Drive upload HttpError: {e.resp.status} - {e.error_details}")
+            return UploadResult(success=False, error=f"HttpError {e.resp.status}: {str(e)}")
         except Exception as e:
-            logger.error(f"Drive upload error: {e}")
+            logger.error(f"Drive upload error: {type(e).__name__}: {e}", exc_info=True)
             return UploadResult(success=False, error=str(e))
     
-    @retry(max_attempts=3, backoff_base=2.0, exceptions=(HttpError, ConnectionError))
+    @retry(max_attempts=3, backoff_base=2.0, exceptions=RETRYABLE_EXCEPTIONS)
     def upload_csv(self, csv_file_path: str) -> UploadResult:
         """
         Upload CSV file to a 'Surveys' folder, updating if exists.
