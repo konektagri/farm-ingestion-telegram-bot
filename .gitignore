@@ -33,6 +33,4 @@ logs/
 examples/*
 scripts/*
 
-farm_photos/*
-survey_images/*
 farm_surveys.csv

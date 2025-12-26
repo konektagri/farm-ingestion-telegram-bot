@@ -256,7 +256,7 @@ async def handle_soil_roughness(update: Update, context: ContextTypes.DEFAULT_TY
     reply_markup = build_growth_stage_keyboard(lang)
     
     # Delete the old message and send a new photo message with growth stage reference
-    growth_stage_image = Path("survey_images/rice_ growth_stage.jpg")
+    growth_stage_image = Path("survey_images/rice_growth_stage.jpg")
     await query.message.delete()
     with open(growth_stage_image, 'rb') as photo:
         await query.message.chat.send_photo(
