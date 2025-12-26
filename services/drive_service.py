@@ -1,6 +1,7 @@
 """Google Drive service with retry logic and folder caching."""
 import os
 import ssl
+import http.client
 import logging
 from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+import httplib2
 
 from utils.retry import retry
 
@@ -19,7 +21,16 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 SERVICE_ACCOUNT_FILE = 'secret/service_account.json'
 
 # Exceptions that should trigger a retry
-RETRYABLE_EXCEPTIONS = (HttpError, ConnectionError, ssl.SSLError, OSError, TimeoutError)
+# Added http.client.IncompleteRead for Docker networking issues with chunked transfers
+RETRYABLE_EXCEPTIONS = (
+    HttpError, 
+    ConnectionError, 
+    ssl.SSLError, 
+    OSError, 
+    TimeoutError,
+    http.client.IncompleteRead,
+    httplib2.ServerNotFoundError,
+)
 
 
 @dataclass
@@ -73,7 +84,20 @@ class DriveService:
             scopes=SCOPES
         )
         delegated_creds = creds.with_subject(self._impersonated_email)
-        self._service = build('drive', 'v3', credentials=delegated_creds)
+        
+        # Create custom HTTP transport with timeout and disabled caching
+        # This helps prevent SSL/connection reuse issues in Docker containers
+        http = httplib2.Http(
+            timeout=60,  # 60 second timeout
+            disable_ssl_certificate_validation=False
+        )
+        # Disable connection caching to prevent SSL reuse errors
+        http.follow_redirects = True
+        
+        from google_auth_httplib2 import AuthorizedHttp
+        authorized_http = AuthorizedHttp(delegated_creds, http=http)
+        
+        self._service = build('drive', 'v3', http=authorized_http)
         logger.info("Google Drive service initialized successfully")
     
     @property
@@ -110,6 +134,11 @@ class DriveService:
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True
             ).execute()
+            
+            # Validate response - httplib2 can return corrupted data after connection issues
+            if not isinstance(results, dict):
+                logger.warning(f"Invalid API response type: {type(results)}, retrying...")
+                raise ConnectionError(f"Invalid API response: expected dict, got {type(results)}")
             
             folders = results.get('files', [])
             if folders:
@@ -179,26 +208,8 @@ class DriveService:
             folder_id = self.create_folder_path(folder_path)
             logger.info(f"Folder ID obtained: {folder_id}")
             
-            file_metadata = {
-                'name': os.path.basename(file_path),
-                'parents': [folder_id]
-            }
-            
-            media = MediaFileUpload(file_path, resumable=True)
-            
-            file = self._service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webViewLink',
-                supportsAllDrives=True
-            ).execute()
-            
-            logger.info(f"Upload successful: {file.get('id')}")
-            return UploadResult(
-                success=True,
-                file_id=file.get('id'),
-                web_link=file.get('webViewLink')
-            )
+            # Use internal retry for the actual upload
+            return self._upload_file_with_retry(file_path, folder_id)
             
         except HttpError as e:
             logger.error(f"Drive upload HttpError: {e.resp.status} - {e.error_details}")
@@ -206,6 +217,44 @@ class DriveService:
         except Exception as e:
             logger.error(f"Drive upload error: {type(e).__name__}: {e}", exc_info=True)
             return UploadResult(success=False, error=str(e))
+    
+    @retry(max_attempts=3, backoff_base=2.0, exceptions=RETRYABLE_EXCEPTIONS)
+    def _upload_file_with_retry(self, file_path: str, folder_id: str) -> UploadResult:
+        """
+        Internal method to upload file with retry logic.
+        
+        Args:
+            file_path: Local path to the file
+            folder_id: Google Drive folder ID to upload to
+            
+        Returns:
+            UploadResult with success status and file info
+        """
+        file_metadata = {
+            'name': os.path.basename(file_path),
+            'parents': [folder_id]
+        }
+        
+        # Create fresh MediaFileUpload for each attempt
+        media = MediaFileUpload(file_path, resumable=True)
+        
+        file = self._service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink',
+            supportsAllDrives=True
+        ).execute()
+        
+        # Validate response
+        if not isinstance(file, dict):
+            raise ConnectionError(f"Invalid API response: expected dict, got {type(file)}")
+        
+        logger.info(f"Upload successful: {file.get('id')}")
+        return UploadResult(
+            success=True,
+            file_id=file.get('id'),
+            web_link=file.get('webViewLink')
+        )
     
     @retry(max_attempts=3, backoff_base=2.0, exceptions=RETRYABLE_EXCEPTIONS)
     def upload_csv(self, csv_file_path: str) -> UploadResult:

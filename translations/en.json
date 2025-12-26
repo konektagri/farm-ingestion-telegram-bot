@@ -18,7 +18,6 @@
   "photo_upload_instruction": "📸 Upload photos of this farm by clicking 📎",
   "photo_saved": "✅ Photo #{count} uploaded successfully\n📁 {folder}\nSend more photos or type /new to survey another farm.",
   "continue_or_new": "📸 You can continue uploading more photos for this farm, or click the button below to start a new survey.",
-  "error_saving": "❌ Upload failed. Check connection and try again.",
   "cancel_msg": "❌ Data collection cancelled.\nSend /start to begin new survey.",
   "add_new_farm": "➕ Survey Another Farm",
   "data_synced": "☁️ Data synced to cloud storage",
