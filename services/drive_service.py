@@ -3,6 +3,7 @@ import os
 import ssl
 import http.client
 import logging
+import threading
 from typing import Optional, Tuple, Dict
 from dataclasses import dataclass
 
@@ -44,17 +45,22 @@ class UploadResult:
 
 class DriveService:
     """
-    Google Drive service with retry logic, folder caching, and batch operations.
+    Google Drive service with retry logic, folder caching, and thread safety.
     
-    Uses singleton pattern to maintain a single Drive connection.
+    Uses singleton pattern with thread-local HTTP connections to prevent
+    concurrent access issues when multiple uploads run in parallel.
     """
     
     _instance: Optional['DriveService'] = None
+    _lock = threading.Lock()  # Lock for singleton creation
     
     def __new__(cls) -> 'DriveService':
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
+            with cls._lock:
+                # Double-check locking pattern
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
         return cls._instance
     
     def __init__(self):
@@ -63,15 +69,17 @@ class DriveService:
         
         self._parent_folder_id = os.getenv('PARENT_FOLDER_ID')
         self._impersonated_email = os.getenv('IMPERSONATED_USER_EMAIL')
-        self._service = None
         self._folder_cache: Dict[str, str] = {}  # path -> folder_id cache
+        self._cache_lock = threading.Lock()  # Lock for cache access
+        self._thread_local = threading.local()  # Thread-local storage for services
+        self._credentials = None
         self._initialized = True
         
-        # Initialize service
-        self._init_service()
+        # Validate config and load credentials
+        self._init_credentials()
     
-    def _init_service(self):
-        """Initialize the Google Drive API service."""
+    def _init_credentials(self):
+        """Initialize credentials (shared across threads)."""
         if not self._parent_folder_id:
             raise ValueError("❌ PARENT_FOLDER_ID is missing in .env file.")
         if not self._impersonated_email:
@@ -83,22 +91,35 @@ class DriveService:
             SERVICE_ACCOUNT_FILE,
             scopes=SCOPES
         )
-        delegated_creds = creds.with_subject(self._impersonated_email)
+        self._credentials = creds.with_subject(self._impersonated_email)
+        logger.info("Google Drive credentials initialized successfully")
+    
+    def _get_thread_service(self):
+        """
+        Get a thread-local Google Drive service instance.
         
-        # Create custom HTTP transport with timeout and disabled caching
-        # This helps prevent SSL/connection reuse issues in Docker containers
-        http = httplib2.Http(
-            timeout=60,  # 60 second timeout
-            disable_ssl_certificate_validation=False
-        )
-        # Disable connection caching to prevent SSL reuse errors
-        http.follow_redirects = True
+        Each thread gets its own HTTP connection to prevent concurrent access issues.
+        """
+        if not hasattr(self._thread_local, 'service') or self._thread_local.service is None:
+            # Create a new HTTP transport for this thread
+            http = httplib2.Http(
+                timeout=60,  # 60 second timeout
+                disable_ssl_certificate_validation=False
+            )
+            http.follow_redirects = True
+            
+            from google_auth_httplib2 import AuthorizedHttp
+            authorized_http = AuthorizedHttp(self._credentials, http=http)
+            
+            self._thread_local.service = build('drive', 'v3', http=authorized_http)
+            logger.debug(f"Created new Drive service for thread {threading.current_thread().name}")
         
-        from google_auth_httplib2 import AuthorizedHttp
-        authorized_http = AuthorizedHttp(delegated_creds, http=http)
-        
-        self._service = build('drive', 'v3', http=authorized_http)
-        logger.info("Google Drive service initialized successfully")
+        return self._thread_local.service
+    
+    @property
+    def _service(self):
+        """Property to get thread-local service (for backward compatibility)."""
+        return self._get_thread_service()
     
     @property
     def parent_folder_id(self) -> str:
@@ -117,10 +138,11 @@ class DriveService:
         Returns:
             Folder ID
         """
-        # Check cache first
+        # Check cache first (thread-safe read)
         cache_key = f"{parent_id}/{folder_name}"
-        if cache_key in self._folder_cache:
-            return self._folder_cache[cache_key]
+        with self._cache_lock:
+            if cache_key in self._folder_cache:
+                return self._folder_cache[cache_key]
         
         try:
             query = (
@@ -143,7 +165,8 @@ class DriveService:
             folders = results.get('files', [])
             if folders:
                 folder_id = folders[0]['id']
-                self._folder_cache[cache_key] = folder_id
+                with self._cache_lock:
+                    self._folder_cache[cache_key] = folder_id
                 return folder_id
             
             # Create folder
@@ -159,7 +182,8 @@ class DriveService:
             ).execute()
             
             folder_id = folder.get('id')
-            self._folder_cache[cache_key] = folder_id
+            with self._cache_lock:
+                self._folder_cache[cache_key] = folder_id
             logger.info(f"Created folder: {folder_name}")
             return folder_id
             
